@@ -1,0 +1,1139 @@
+{
+    "openapi": "3.1.2",
+    "info": {
+        "title": "Wallet & Ledger API",
+        "version": "0.0.1",
+        "description": "Wallet and double-entry ledger API: wallet-to-wallet transfers, gateway deposits (ZarinPal) and transaction history.\n\n- **Amounts** are integers in the currency's storage unit \u2014 rials for IRR. Never decimals, never tomans.\n- **Authentication** is out of scope: send the authenticated user's id in the `X-User-Id` header (the provider callback is the one exception).\n- **Idempotency**: `POST` operations require an `Idempotency-Key` header. Retrying with the same key and body returns the original outcome; the same key with a different body returns `409`.\n- **Errors** share one shape: `{\"error\": {\"code\": \"...\", \"message\": \"...\"}}`; validation errors add a `fields` object.\n- **Deposits** are credited only after the payment is verified server-to-server with the provider; a customer returning from the gateway is never proof of payment."
+    },
+    "servers": [
+        {
+            "url": "http://localhost:8000/api"
+        }
+    ],
+    "paths": {
+        "/deposits": {
+            "post": {
+                "operationId": "deposit.store",
+                "description": "Creates a pending deposit and asks the payment provider for a payment session.\nNothing is credited here: the client redirects the customer to `redirect_url`, and the\nwallet is only credited after the customer returns and the payment is verified\nserver-to-server.\n\nRetrying with the same `Idempotency-Key` and body returns the same result (the response\ncarries `Idempotent-Replayed: true`) and never creates a second deposit; the same key with\na different body returns 409. After a 503 (provider outcome unknown) retry with the same\nkey to resume the same deposit. After a 502 the deposit is failed and a new key is required.",
+                "summary": "Start a deposit",
+                "tags": [
+                    "Deposit"
+                ],
+                "parameters": [
+                    {
+                        "name": "X-User-Id",
+                        "in": "header",
+                        "required": true,
+                        "description": "Id of the authenticated user. Authentication is out of scope, so this header stands in for it; a missing or unknown id returns 401.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true,
+                        "description": "Client-chosen key (max 128 printable ASCII characters), unique per user and operation. Retrying with the same key and payload returns the original outcome; the same key with a different payload returns 409.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CreateDepositRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "deposit_reference": {
+                                            "type": "string"
+                                        },
+                                        "status": {
+                                            "type": "string"
+                                        },
+                                        "provider": {
+                                            "type": "string"
+                                        },
+                                        "amount": {
+                                            "type": "integer"
+                                        },
+                                        "currency": {
+                                            "type": "string"
+                                        },
+                                        "redirect_url": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": [
+                                        "deposit_reference",
+                                        "status",
+                                        "provider",
+                                        "amount",
+                                        "currency",
+                                        "redirect_url"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "- `unauthenticated`: Missing or unknown user.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "unauthenticated"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "- `forbidden`: You do not have access to this resource.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "forbidden"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "- `wallet_not_found`: Wallet not found.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "wallet_not_found"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "- `idempotency_conflict`: The idempotency key was already used with a different request.\n- `deposit_state_conflict`: The deposit is in a state that does not allow this operation.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "idempotency_conflict",
+                                                        "deposit_state_conflict"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "- `provider_disabled`: The payment provider is not available.\n- `invalid_amount`: The amount is invalid.\n- `currency_inactive`: The currency is not active.\n- `currency_mismatch`: The currencies do not match.\n- `validation_failed`: The request is invalid; `fields` maps each invalid field to its messages.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "provider_disabled",
+                                                        "invalid_amount",
+                                                        "currency_inactive",
+                                                        "currency_mismatch",
+                                                        "validation_failed"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                },
+                                                "fields": {
+                                                    "type": "object",
+                                                    "description": "Present for `validation_failed`: field name to list of messages.",
+                                                    "additionalProperties": {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "type": "string"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "- `provider_rejected`: The payment provider rejected the request.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "provider_rejected"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "- `provider_unavailable`: The payment provider is temporarily unavailable. Please retry.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "provider_unavailable"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/deposits/callback/{provider}": {
+            "get": {
+                "operationId": "deposit.callback",
+                "description": "The browser redirect from the gateway. It carries no user header: the query string is\nuntrusted and only selects a stored deposit by its `Authority`. The payment is then verified\nserver-to-server using the amount stored at initiation, and the ledger transaction is posted\nonly after that. Nothing is ever created or credited from the query parameters alone.\n\n`result` is derived from persisted state: `confirmed` (the ledger transaction committed),\n`pending` (verification outcome not established yet; open the same URL again to retry),\n`cancelled` (the provider reported cancellation, nothing credited) or `failed` (the provider\nauthoritatively rejected the payment). Revisiting the URL never credits twice.",
+                "summary": "Customer return from the payment provider",
+                "tags": [
+                    "Deposit"
+                ],
+                "parameters": [
+                    {
+                        "name": "provider",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "result": {
+                                            "type": "string"
+                                        },
+                                        "deposit_reference": {
+                                            "type": "string"
+                                        },
+                                        "amount": {
+                                            "type": "integer"
+                                        },
+                                        "currency": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": [
+                                        "result",
+                                        "deposit_reference",
+                                        "amount",
+                                        "currency"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "- `deposit_not_found`: Deposit not found.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "deposit_not_found"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "- `deposit_state_conflict`: The deposit is in a state that does not allow this operation.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "deposit_state_conflict"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "- `provider_disabled`: The payment provider is not available.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "provider_disabled"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": []
+            }
+        },
+        "/transfers": {
+            "post": {
+                "operationId": "transfer.store",
+                "description": "Moves money between two wallets of the same currency. The debit, the credit, the two\nledger entries and the stored idempotency outcome commit atomically, or not at all.\nAmounts are integers in the currency's storage unit (rials for IRR).\n\nRetrying with the same `Idempotency-Key` and the same body returns the original\nresponse without moving money again (the response carries `Idempotent-Replayed: true`);\nthe same key with a different body returns 409. Requests that fail validation are not\nstored, so their key can be reused.",
+                "summary": "Create a transfer",
+                "tags": [
+                    "Transfer"
+                ],
+                "parameters": [
+                    {
+                        "name": "X-User-Id",
+                        "in": "header",
+                        "required": true,
+                        "description": "Id of the authenticated user. Authentication is out of scope, so this header stands in for it; a missing or unknown id returns 401.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true,
+                        "description": "Client-chosen key (max 128 printable ASCII characters), unique per user and operation. Retrying with the same key and payload returns the original outcome; the same key with a different payload returns 409.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CreateTransferRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "reference": {
+                                            "type": "string"
+                                        },
+                                        "type": {
+                                            "type": "string"
+                                        },
+                                        "status": {
+                                            "type": "string"
+                                        },
+                                        "amount": {
+                                            "type": "integer"
+                                        },
+                                        "currency": {
+                                            "type": "string"
+                                        },
+                                        "from_wallet_id": {
+                                            "type": "integer"
+                                        },
+                                        "to_wallet_id": {
+                                            "type": "integer"
+                                        },
+                                        "posted_at": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": [
+                                        "reference",
+                                        "type",
+                                        "status",
+                                        "amount",
+                                        "currency",
+                                        "from_wallet_id",
+                                        "to_wallet_id",
+                                        "posted_at"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "- `unauthenticated`: Missing or unknown user.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "unauthenticated"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "- `forbidden`: You do not have access to this resource.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "forbidden"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "- `wallet_not_found`: Wallet not found.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "wallet_not_found"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "- `idempotency_conflict`: The idempotency key was already used with a different request.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "idempotency_conflict"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "- `insufficient_funds`: Insufficient funds in the sender wallet.\n- `self_transfer`: Sender and recipient wallets must be different.\n- `currency_mismatch`: The currencies do not match.\n- `currency_inactive`: The currency is not active.\n- `invalid_amount`: The amount is invalid.\n- `validation_failed`: The request is invalid; `fields` maps each invalid field to its messages.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "insufficient_funds",
+                                                        "self_transfer",
+                                                        "currency_mismatch",
+                                                        "currency_inactive",
+                                                        "invalid_amount",
+                                                        "validation_failed"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                },
+                                                "fields": {
+                                                    "type": "object",
+                                                    "description": "Present for `validation_failed`: field name to list of messages.",
+                                                    "additionalProperties": {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "type": "string"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/wallets/{wallet}/transactions": {
+            "get": {
+                "operationId": "walletTransaction.index",
+                "description": "Posted transactions of one wallet, newest first (by transaction id), paginated with an opaque\ncursor: pass the previous response's `next_cursor` as `cursor` to get the next page, until it\nis `null`. Both wallets of a transfer see the same `reference`; `direction` is from the\nrequested wallet's point of view, and `counterparty_wallet_id` is `null` for deposits.\nPending and failed deposits are not transactions and are not listed.\n\nDates are ISO-8601 and normalized to UTC (a value without an offset is read as UTC);\n`from` is inclusive and `to` is exclusive.",
+                "summary": "List a wallet's transactions",
+                "tags": [
+                    "WalletTransaction"
+                ],
+                "parameters": [
+                    {
+                        "name": "wallet",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "type",
+                        "in": "query",
+                        "description": "Only transactions of this type.",
+                        "schema": {
+                            "type": [
+                                "string",
+                                "null"
+                            ],
+                            "enum": [
+                                "transfer",
+                                "deposit",
+                                null
+                            ]
+                        }
+                    },
+                    {
+                        "name": "from",
+                        "in": "query",
+                        "description": "Start of the range, inclusive (ISO-8601; read as UTC when no offset is given).",
+                        "schema": {
+                            "type": [
+                                "string",
+                                "null"
+                            ],
+                            "format": "date-time"
+                        }
+                    },
+                    {
+                        "name": "to",
+                        "in": "query",
+                        "description": "End of the range, exclusive; it must be after `from`.",
+                        "schema": {
+                            "type": [
+                                "string",
+                                "null"
+                            ],
+                            "format": "date-time"
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "description": "Page size (default 20).",
+                        "schema": {
+                            "type": [
+                                "integer",
+                                "null"
+                            ],
+                            "minimum": 1,
+                            "maximum": 100
+                        }
+                    },
+                    {
+                        "name": "cursor",
+                        "in": "query",
+                        "description": "Opaque cursor from the previous page's `next_cursor`.",
+                        "schema": {
+                            "type": [
+                                "string",
+                                "null"
+                            ],
+                            "maxLength": 512
+                        }
+                    },
+                    {
+                        "name": "X-User-Id",
+                        "in": "header",
+                        "required": true,
+                        "description": "Id of the authenticated user. Authentication is out of scope, so this header stands in for it; a missing or unknown id returns 401.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "reference": {
+                                                        "type": "string"
+                                                    },
+                                                    "type": {
+                                                        "type": "string"
+                                                    },
+                                                    "status": {
+                                                        "type": "string"
+                                                    },
+                                                    "direction": {
+                                                        "type": "string"
+                                                    },
+                                                    "amount": {
+                                                        "type": "integer"
+                                                    },
+                                                    "currency": {
+                                                        "type": "string"
+                                                    },
+                                                    "counterparty_wallet_id": {
+                                                        "type": [
+                                                            "integer",
+                                                            "null"
+                                                        ]
+                                                    },
+                                                    "posted_at": {
+                                                        "type": "string"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "reference",
+                                                    "type",
+                                                    "status",
+                                                    "direction",
+                                                    "amount",
+                                                    "currency",
+                                                    "counterparty_wallet_id",
+                                                    "posted_at"
+                                                ]
+                                            }
+                                        },
+                                        "next_cursor": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        },
+                                        "per_page": {
+                                            "type": "integer"
+                                        }
+                                    },
+                                    "required": [
+                                        "data",
+                                        "next_cursor",
+                                        "per_page"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "- `unauthenticated`: Missing or unknown user.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "unauthenticated"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "- `forbidden`: You do not have access to this resource.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "forbidden"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "- `wallet_not_found`: Wallet not found.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "wallet_not_found"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "- `validation_failed`: The request is invalid; `fields` maps each invalid field to its messages.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "type": "object",
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "validation_failed"
+                                                    ]
+                                                },
+                                                "message": {
+                                                    "type": "string"
+                                                },
+                                                "fields": {
+                                                    "type": "object",
+                                                    "description": "Present for `validation_failed`: field name to list of messages.",
+                                                    "additionalProperties": {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "type": "string"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "required": [
+                                                "code",
+                                                "message"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "error"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "CreateDepositRequest": {
+                "type": "object",
+                "properties": {
+                    "wallet_id": {
+                        "type": "integer",
+                        "description": "Wallet to credit once the payment is verified; it must belong to the authenticated user.",
+                        "minimum": 1
+                    },
+                    "amount": {
+                        "type": "integer",
+                        "description": "Amount in the currency's storage unit (rials for IRR), a positive integer up to the configured maximum.",
+                        "examples": [
+                            500000
+                        ],
+                        "minimum": 1,
+                        "maximum": 1000000000000
+                    },
+                    "provider": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Name of an enabled payment provider. Defaults to the configured default provider.",
+                        "examples": [
+                            "zarinpal"
+                        ],
+                        "maxLength": 32
+                    }
+                },
+                "required": [
+                    "wallet_id",
+                    "amount"
+                ],
+                "title": "CreateDepositRequest"
+            },
+            "CreateTransferRequest": {
+                "type": "object",
+                "properties": {
+                    "from_wallet_id": {
+                        "type": "integer",
+                        "description": "Wallet to debit; it must belong to the authenticated user.",
+                        "minimum": 1
+                    },
+                    "to_wallet_id": {
+                        "type": "integer",
+                        "description": "Wallet to credit; it must differ from the sender and use the same currency.",
+                        "minimum": 1
+                    },
+                    "amount": {
+                        "type": "integer",
+                        "description": "Amount in the currency's storage unit (rials for IRR), a positive integer up to the configured maximum.",
+                        "examples": [
+                            250000
+                        ],
+                        "minimum": 1,
+                        "maximum": 1000000000000
+                    }
+                },
+                "required": [
+                    "from_wallet_id",
+                    "to_wallet_id",
+                    "amount"
+                ],
+                "title": "CreateTransferRequest"
+            }
+        }
+    }
+}
