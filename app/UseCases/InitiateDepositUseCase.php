@@ -118,6 +118,16 @@ class InitiateDepositUseCase
      */
     private function replay(array $stored): array
     {
-        return ['status' => $stored['response_status'], 'body' => $stored['response_body'], 'replayed' => true];
+        $deposit = $this->deposits->find($stored['deposit_id']);
+        $body = $stored['response_body'];
+
+        // The stored body is a snapshot from creation. The deposit stays the same logical
+        // outcome, but its status moves on and a settled deposit must not offer a payment link.
+        $body['status'] = $deposit->status->label();
+        if ($deposit->status !== DepositStatus::Pending) {
+            $body['redirect_url'] = null;
+        }
+
+        return ['status' => $stored['response_status'], 'body' => $body, 'replayed' => true];
     }
 }

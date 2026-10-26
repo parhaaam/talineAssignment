@@ -2,13 +2,20 @@
 
 namespace Tests\Concurrency;
 
+use App\Enums\VerificationOutcome;
+use App\Payment\Data\VerificationResult;
+use App\Payment\Fake\FakePaymentProvider;
+use App\UseCases\{CreateTransferUseCase, HandleDepositReturnUseCase, InitiateDepositUseCase};
+use Closure;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Support\Facades\Concurrency;
 use Tests\Support\FinancialFixtures;
 use Tests\TestCase;
+use Throwable;
 
 /**
- * Real parallelism: each operation runs in its own PHP process with its own MySQL
- * connection, released together by a barrier file. Data is committed (no wrapping
+ * Real parallelism via the Concurrency facade: each operation runs in its own PHP
+ * process with its own MySQL connection, all released at a shared start time. Data is committed (no wrapping
  * transaction), so these tests exercise genuine row locks and unique indexes.
  */
 abstract class ConcurrencyTestCase extends TestCase
@@ -38,41 +45,40 @@ abstract class ConcurrencyTestCase extends TestCase
      */
     protected function runInParallel(array $jobs): array
     {
-        $dir = sys_get_temp_dir().'/wallet-concurrency-'.bin2hex(random_bytes(6));
-        mkdir($dir);
-        $barrier = "{$dir}/go";
-        $processes = [];
+        // Children boot at different speeds; they all spin until this instant so the
+        // operations themselves start together.
+        $startAt = microtime(true) + 2.0;
 
-        foreach ($jobs as $i => $job) {
-            $process = proc_open(
-                [PHP_BINARY, __DIR__.'/worker.php', $barrier, "{$dir}/ready-{$i}", json_encode($job)],
-                [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-                $pipes,
-                base_path(),
-                array_merge(getenv(), $_ENV, ['APP_ENV' => 'testing']),
-            );
-            $processes[$i] = [$process, $pipes];
-        }
+        return Concurrency::driver('process')->run(
+            array_map(fn (array $job) => self::task($job, $startAt), $jobs),
+            timeout: 60,
+        );
+    }
 
-        $deadline = microtime(true) + 60;
-        while (count(glob("{$dir}/ready-*")) < count($jobs) && microtime(true) < $deadline) {
-            usleep(10_000);
-        }
-        touch($barrier);
+    private static function task(array $job, float $startAt): Closure
+    {
+        return static function () use ($job, $startAt) {
+            while (microtime(true) < $startAt) {
+                usleep(200);
+            }
 
-        $results = [];
-        foreach ($processes as $i => [$process, $pipes]) {
-            $stdout = stream_get_contents($pipes[1]);
-            $stderr = stream_get_contents($pipes[2]);
-            proc_close($process);
-            $decoded = json_decode($stdout, true);
-            $this->assertIsArray($decoded, "worker {$i} produced no result. stdout: {$stdout} stderr: {$stderr}");
-            $results[$i] = $decoded;
-        }
+            try {
+                $result = match ($job['action']) {
+                    'transfer' => app(CreateTransferUseCase::class)
+                        ->execute($job['user_id'], $job['key'], $job['from'], $job['to'], $job['amount']),
+                    'deposit' => app(InitiateDepositUseCase::class)
+                        ->execute($job['user_id'], $job['key'], $job['wallet_id'], $job['amount'], 'fake'),
+                    'callback' => (function () use ($job) {
+                        FakePaymentProvider::$defaultVerify = new VerificationResult(VerificationOutcome::Verified, $job['ref'], '100');
 
-        array_map('unlink', glob("{$dir}/*"));
-        rmdir($dir);
+                        return app(HandleDepositReturnUseCase::class)->execute('fake', ['Authority' => $job['authority'], 'Status' => 'OK']);
+                    })(),
+                };
 
-        return $results;
+                return ['ok' => true, 'result' => $result];
+            } catch (Throwable $e) {
+                return ['ok' => false, 'error' => $e::class, 'message' => $e->getMessage()];
+            }
+        };
     }
 }

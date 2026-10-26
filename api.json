@@ -14,7 +14,7 @@
         "/deposits": {
             "post": {
                 "operationId": "deposit.store",
-                "description": "Creates a pending deposit and asks the payment provider for a payment session.\nNothing is credited here: the client redirects the customer to `redirect_url`, and the\nwallet is only credited after the customer returns and the payment is verified\nserver-to-server.\n\nRetrying with the same `Idempotency-Key` and body returns the same result (the response\ncarries `Idempotent-Replayed: true`) and never creates a second deposit; the same key with\na different body returns 409. After a 503 (provider outcome unknown) retry with the same\nkey to resume the same deposit. After a 502 the deposit is failed and a new key is required.",
+                "description": "Creates a pending deposit and asks the payment provider for a payment session.\nNothing is credited here: the client redirects the customer to `redirect_url`, and the\nwallet is only credited after the customer returns and the payment is verified\nserver-to-server.\n\nRetrying with the same `Idempotency-Key` and body returns the same result (the response\ncarries `Idempotent-Replayed: true`) and never creates a second deposit; the same key with\na different body returns 409. A replay always reports the deposit's current `status`, and\n`redirect_url` is only present while the deposit is still `pending`: a customer who cancelled\ncan pay again through the same link, while a confirmed, failed or unverified deposit gets `null`. After a 503 (provider outcome unknown) retry with the same\nkey to resume the same deposit. After a 502 the deposit is failed and a new key is required.",
                 "summary": "Start a deposit",
                 "tags": [
                     "Deposit"
@@ -73,7 +73,10 @@
                                             "type": "string"
                                         },
                                         "redirect_url": {
-                                            "type": "string"
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
                                         }
                                     },
                                     "required": [

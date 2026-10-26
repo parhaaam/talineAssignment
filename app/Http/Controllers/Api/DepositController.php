@@ -28,12 +28,14 @@ class DepositController extends Controller
      *
      * Retrying with the same `Idempotency-Key` and body returns the same result (the response
      * carries `Idempotent-Replayed: true`) and never creates a second deposit; the same key with
-     * a different body returns 409. After a 503 (provider outcome unknown) retry with the same
+     * a different body returns 409. A replay always reports the deposit's current `status`, and
+     * `redirect_url` is only present while the deposit is still `pending`: a customer who cancelled
+     * can pay again through the same link, while a confirmed, failed or unverified deposit gets `null`. After a 503 (provider outcome unknown) retry with the same
      * key to resume the same deposit. After a 502 the deposit is failed and a new key is required.
      *
      * @status 201
      *
-     * @response array{deposit_reference: string, status: string, provider: string, amount: int, currency: string, redirect_url: string}
+     * @response array{deposit_reference: string, status: string, provider: string, amount: int, currency: string, redirect_url: string|null}
      *
      * @throws Forbidden
      * @throws WalletNotFound

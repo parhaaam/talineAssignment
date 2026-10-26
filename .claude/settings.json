@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d['info']['title'], list\\(d['paths']\\)\\)\")",
-      "Bash(grep -vE \"✓|^\\\\s*$\")"
+      "Bash(grep -vE \"✓|^\\\\s*$\")",
+      "Bash(grep -vE \"^\\\\s*$\")",
+      "Bash(git rm *)",
+      "Bash(sed -i '' 's|spawns independent PHP processes \\(`tests/Concurrency/worker.php`\\), each with its own MySQL connection, released together by a barrier file.|runs each operation in its own PHP process via Laravel'\"'\"'s `Concurrency` facade \\(`process` driver\\), each with its own MySQL connection, released together at a shared start time.|' README.md)"
     ]
   }
 }

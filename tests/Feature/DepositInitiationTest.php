@@ -2,9 +2,10 @@
 
 namespace Tests\Feature;
 
-use App\Enums\DepositStatus;
+use App\Enums\{DepositStatus, VerificationOutcome};
 use App\Exceptions\PaymentProviderException;
 use App\Models\{Deposit, IdempotencyRecord, Transaction, Wallet};
+use App\Payment\Data\VerificationResult;
 use App\Payment\Fake\FakePaymentProvider;
 use Tests\FinancialTestCase;
 
@@ -209,5 +210,50 @@ class DepositInitiationTest extends FinancialTestCase
         $body = $this->initiate($wallet)->assertCreated()->getContent();
 
         $this->assertStringNotContainsString((string) config('wallet.providers.zarinpal.merchant_id'), $body);
+    }
+
+    public function test_replay_after_the_customer_cancelled_returns_the_same_payable_deposit(): void
+    {
+        $wallet = $this->makeWallet();
+        $first = $this->initiate($wallet)->assertCreated();
+        $this->getJson('/api/deposits/callback/fake?Authority=FAKE0000000001&Status=NOK')->assertJsonPath('result', 'cancelled');
+
+        $replay = $this->initiate($wallet)->assertCreated()->assertHeader('Idempotent-Replayed', 'true');
+
+        $this->assertSame($first->json('deposit_reference'), $replay->json('deposit_reference'));
+        $this->assertSame($first->json('redirect_url'), $replay->json('redirect_url'));
+        $this->assertSame('pending', $replay->json('status'));
+        $this->assertCount(1, FakePaymentProvider::$createCalls);
+    }
+
+    public function test_replay_after_payment_reports_the_current_status_and_no_payable_link(): void
+    {
+        $wallet = $this->makeWallet();
+        $first = $this->initiate($wallet)->assertCreated();
+        FakePaymentProvider::$verifyQueue = [new VerificationResult(VerificationOutcome::Verified, '42', '100')];
+        $this->getJson('/api/deposits/callback/fake?Authority=FAKE0000000001&Status=OK')->assertJsonPath('result', 'confirmed');
+
+        $replay = $this->initiate($wallet)->assertCreated()->assertHeader('Idempotent-Replayed', 'true');
+
+        $this->assertSame($first->json('deposit_reference'), $replay->json('deposit_reference'));
+        $this->assertSame('confirmed', $replay->json('status'));
+        $this->assertNull($replay->json('redirect_url'));
+        $this->assertSame(50_000, $wallet->refresh()->balance);
+        $this->assertCount(1, FakePaymentProvider::$createCalls);
+        $this->assertSame(1, Deposit::query()->count());
+    }
+
+    public function test_replay_of_a_failed_deposit_reports_failed_and_no_payable_link(): void
+    {
+        $wallet = $this->makeWallet();
+        $this->initiate($wallet)->assertCreated();
+        FakePaymentProvider::$verifyQueue = [new VerificationResult(VerificationOutcome::NotVerified, null, '-51')];
+        $this->getJson('/api/deposits/callback/fake?Authority=FAKE0000000001&Status=OK')->assertJsonPath('result', 'failed');
+
+        $replay = $this->initiate($wallet)->assertCreated();
+
+        $this->assertSame('failed', $replay->json('status'));
+        $this->assertNull($replay->json('redirect_url'));
+        $this->assertSame(0, $wallet->refresh()->balance);
     }
 }

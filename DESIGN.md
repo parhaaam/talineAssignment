@@ -22,8 +22,8 @@ Migrations are in `database/migrations`. Primary keys are `bigint` auto-incremen
 - `idempotency_records`: unique `(user_id, scope, idempotency_key)`.
 
 **Deviation:** the brief asks for "constrained string" columns (`type`, `status`, `accounts.type`). None of them is a DB `ENUM` or `CHECK`, because adding a value must not require DDL; they are validated by PHP backed enums (`app/Enums`) on the write path.
-- `accounts.type`, `transactions.type` and `transactions.status` are `TINYINT UNSIGNED` columns backed by int enums (`AccountType`: 1 = wallet, 2 = payment_clearing; `TransactionType`: 1 = transfer, 2 = deposit; `TransactionStatus`: 1 = posted). The models cast them to the enums, and the API still returns the readable string through each enum's `label()`. Existing numbers must never be reassigned.
-- The remaining categorical columns (`deposits.status`) is a plain `varchar`.
+- `accounts.type`, `transactions.type`, `transactions.status` and `deposits.status` are `TINYINT UNSIGNED` columns backed by int enums (`AccountType`: 1 = wallet, 2 = payment_clearing; `TransactionType`: 1 = transfer, 2 = deposit; `TransactionStatus`: 1 = posted; `DepositStatus`: 1 = pending, 2 = verification_unknown, 3 = verified, 4 = confirmed, 5 = failed). The models cast them to the enums, and the API still returns the readable string through each enum's `label()`. Existing numbers must never be reassigned.
+- No categorical column is left as a string.
 - The database therefore does not stop a rogue writer from inserting an unknown value; all writes go through repositories.
 
 ## 2. Double-entry ledger [Implemented]
@@ -41,7 +41,7 @@ A transfer transaction's `amount` is N, not the sum of absolute entries. Both wa
 
 ## 3. Balance projection [Implemented] and reconciliation [Not implemented]
 
-`wallets.balance` is a projection of the wallet account's entries, updated in the same transaction that inserts them. Tests assert `balance == SUM(entries)` after every money test (`assertLedgerConsistent`). A production reconciliation command that checks this for all wallets and reports (never repairs) discrepancies is **not implemented** (dropped from scope by decision); see §16–17.
+`wallets.balance` is a projection of the wallet account's entries, updated in the same transaction that inserts them. Tests assert `balance == SUM(entries)` after every money test (`assertLedgerConsistent`). A production reconciliation command that checks this for all wallets and reports (never repairs) discrepancies is **not implemented** ; see §16–17.
 
 ## 4. Deposit lifecycle [Implemented]
 
@@ -72,15 +72,13 @@ Flow:
 3. `NOK` → nothing is credited or verified; response `cancelled`, deposit unchanged.
 4. `OK` → `verify.json` (merchant id, stored amount, authority) outside any transaction → `100` (verified) or `101` (already verified) **and** a non-empty `ref_id` → persist `verified` + `provider_reference` + `provider_verified_at` in its own commit → post ledger transaction in a second transaction → `confirmed`.
 
-ZarinPal answer mapping (error list: zarinpal.com/docs/paymentGateway/errorList): `100`/`101` + `ref_id` → verified/already verified; `-51`, `-54`, `-55` → authoritative not-verified (deposit `failed`); `-50` (amount mismatch), `-53`, `-9…-11`, `-13…-19` → permanent error (deposit stays unresolved, logged, never failed); `-12` (too many attempts), HTTP 5xx, timeouts → retryable; success code without `ref_id`, unknown codes, malformed bodies → pending. HTTP 200 alone is never success. Documentation was checked via the official error list and SDK docs; I could not fetch the full API reference (JS-rendered) so request/response field names follow the v4 contract as documented in SDKs and are covered by mocked-HTTP tests, not by a live ZarinPal call.
-
 ## 9. Rial/toman handling [Implemented]
 
 Canonical unit everywhere is the integer storage unit of the currency (rials for IRR). Conversion happens only in the adapter's `toProviderAmount`. ZarinPal's `currency` parameter defaults to IRT when omitted, so the adapter always sends it explicitly (`IRR` by default). With `ZARINPAL_CURRENCY=IRT` the adapter divides by 10 and rejects amounts not divisible by 10 *before* anything is stored. The provider amount and unit are persisted (`provider_amount`, `provider_currency`) and reused verbatim for verification.
 
 ## 10. Client idempotency vs payment-return deduplication [Implemented]
 
-- **Client idempotency** (`Idempotency-Key` header, scoped `(user, scope, key)`): protects the *client request*. `request_hash` (SHA-256 of the canonical payload) detects a reused key with a different payload → 409. Transfers insert the idempotency row inside the posting transaction, so it commits or rolls back with the money; a concurrent duplicate blocks on the unique index until the winner commits, then receives the winner's stored response. Validation failures are not stored (the key can be reused); only committed outcomes are. Responses never contain provider secrets.
+- **Client idempotency** (`Idempotency-Key` header, scoped `(user, scope, key)`): protects the *client request*. `request_hash` (SHA-256 of the canonical payload) detects a reused key with a different payload → 409. Transfers insert the idempotency row inside the posting transaction, so it commits or rolls back with the money; a concurrent duplicate blocks on the unique index until the winner commits, then receives the winner's stored response. Validation failures are not stored (the key can be reused); only committed outcomes are. Responses never contain provider secrets. A deposit replay is a snapshot of the original response with two live corrections: `status` is the deposit's current status, and `redirect_url` is `null` unless the deposit is still `pending` (so a cancelled attempt can be paid again through the same link, but a settled one offers none).
 - **Payment-return deduplication** protects the *deposit*: the callback is not idempotency-keyed (browsers cannot send one). Correctness comes from state, not from remembering events: the deposit row is locked, a confirmed deposit is returned as is, `deposits.transaction_id` is unique, and `postDeposit` re-checks everything under the lock. Customer returns are not persisted as events (no audit table); only the web server and application logs show who hit the callback.
 
 ## 11–12. Verified but not posted; already-verified; timeouts [Implemented]
@@ -111,7 +109,7 @@ History reads `entries` by `(account_id, transaction_id)` (backward index scan),
 - **Not implemented (dropped from scope by decision):** reconciliation command, stale-deposit recovery job/command, scheduler. These leave brief requirements §11, §12.3 and acceptance items 11/16 only partially met: recovery exists but is *pull-based* (callback revisit), not automatic.
 - MySQL-only SQL (`CHECK`, generated column, `FOR UPDATE`).
 - Ledger immutability is application-level only (model guards), so raw SQL can still alter or delete posted `entries` and `transactions`.
-- Categorical columns are not DB-constrained: three are integer-backed enums, the rest plain strings (see §1).
+- Categorical columns are not DB-constrained: all four are integer-backed enums validated in PHP (see §1).
 - `X-User-Id` stands in for authentication; any caller who can set it is that user.
 - The ZarinPal adapter was tested only against mocked responses; sandbox availability is unverified.
 - Wallet provisioning is seeder-only; no API to create wallets or currencies. Deactivating a currency blocks new transfers/deposits but does not block posting an already-verified deposit (money already moved at the gateway).

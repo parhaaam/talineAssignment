@@ -19,7 +19,8 @@ return new class () extends Migration {
             $table->bigInteger('amount');
             $table->bigInteger('provider_amount')->nullable();
             $table->string('provider_currency', 8)->nullable();
-            $table->string('status', 32);
+            // DepositStatus: 1 = pending, 2 = verification_unknown, 3 = verified, 4 = confirmed, 5 = failed.
+            $table->unsignedTinyInteger('status');
             $table->timestamp('provider_verified_at')->nullable();
             $table->timestamp('confirmed_at')->nullable();
             $table->timestamp('failed_at')->nullable();

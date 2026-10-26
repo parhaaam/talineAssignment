@@ -80,7 +80,7 @@ class DepositInitiationRepository
 
             $body = [
                 'deposit_reference' => $deposit->reference,
-                'status' => $deposit->status->value,
+                'status' => $deposit->status->label(),
                 'provider' => $deposit->provider,
                 'amount' => $deposit->amount,
                 'currency' => $deposit->currency->code,

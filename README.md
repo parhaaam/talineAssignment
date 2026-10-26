@@ -31,7 +31,7 @@ docker compose exec app php artisan test --testsuite=Concurrency # real parallel
 docker compose exec app php artisan test --testsuite=Unit
 ```
 
-The **Concurrency** suite spawns independent PHP processes (`tests/Concurrency/worker.php`), each with its own MySQL connection, released together by a barrier file. It commits real data, so it exercises genuine InnoDB row locks and unique indexes (duplicate idempotency keys, competing transfers, opposite-direction transfers, concurrent payment returns). It has only been run against MySQL 8.4; PostgreSQL has not been tested.
+The **Concurrency** suite runs each operation in its own PHP process via Laravel's `Concurrency` facade (`process` driver), each with its own MySQL connection, released together at a shared start time. It commits real data, so it exercises genuine InnoDB row locks and unique indexes (duplicate idempotency keys, competing transfers, opposite-direction transfers, concurrent payment returns). It has only been run against MySQL 8.4; PostgreSQL has not been tested.
 
 No test makes a live HTTP request: ZarinPal is mocked with `Http::fake()` and the `fake` provider.
 
